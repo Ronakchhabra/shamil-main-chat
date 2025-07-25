@@ -843,14 +843,21 @@ RESPONSE FORMAT:
 
 """)
         return "\n".join(prompt_parts)
-        
+
     def get_data(
         self,
         question: str, 
-        context: Optional[Dict[str, Any]] = None,
+        context: Optional[Dict[str, Any]] = None, 
     ) -> Tuple[str, str]:
         """
         Generate SQL query with execution plan from natural language question.
+        
+        Args:
+            question: Natural language question
+            context: Enhanced context including database schema and memory
+            
+        Returns:
+            Tuple containing (sql_results, sql_query, explanation)
         """        
         # Initialize variables
         sql_results = None
@@ -858,24 +865,22 @@ RESPONSE FORMAT:
         explanation = ""
         
         # Generate execution plan
-
         plan = self.generate_plan(question, context)
-        
         # Generate SQL query using the plan
-        
         sql_query, explanation = self.generate_sql(question, plan, context)
         
         if not sql_query:
-    
             for attempt in range(3):
                 print(f"🔄 Retrying SQL generation, attempt {attempt + 1}/3")
                 plan = self.generate_plan(question, context)
+    
                 sql_query, explanation = self.generate_sql(question, plan, context)
                 if sql_query:
                     break
             else:
                 return None, "", "Failed to generate SQL query after multiple attempts"
-                
+        
+        # Validate SQL syntax
         is_valid, validation_error = self.validate_sql_syntax(sql_query)
         if not is_valid:
             print(f"⚠️ SQL validation failed: {validation_error}")
@@ -890,11 +895,12 @@ RESPONSE FORMAT:
                 print("✅ SQL query fixed successfully")
             else:
                 return None, sql_query, f"SQL validation failed: {validation_error}"
+        
+        # Execute SQL query
         try:
             sql_results = self.db_manager.execute_query(sql_query)
             print("✅ SQL query executed successfully")
         except Exception as e:
-
             print(f"❌ SQL execution failed: {str(e)}")
             fixed_query, fix_explanation, is_fixed = self.fix_sql_query(
                 sql_query, 
@@ -911,4 +917,6 @@ RESPONSE FORMAT:
                     return None, fixed_query, f"Error executing fixed SQL query: {str(retry_error)}"
             else:
                 return None, sql_query, f"Error executing SQL query: {str(e)}"
+        
         return sql_results, sql_query, explanation
+    
