@@ -1,0 +1,13 @@
+numpy
+pandas
+protobuf
+python-dotenv
+google-generativeai
+streamlit
+streamlit-shadcn-ui
+streamlit-chatbox
+streamlit-aggrid
+pyodbc
+openai
+faiss-cpu
+sqlalchemy
