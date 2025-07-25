@@ -547,44 +547,119 @@ def add_message(content, role="user", avatar=None):
     st.session_state.messages.append(message)
 
 def process_user_query(user_input):
-    """Process user query and update results"""
+    """Process user query and update results with step-by-step spinners"""
     if not user_input.strip():
         return
     
     # Add user message to chat
     add_message(user_input, "user", "👤")
     
-    # Show processing indicator
-    with st.spinner("🔍 Analyzing your query..."):
-        try:
-            # Process query with chatbot
-            result = st.session_state.chatbot.process_query(user_input)
+    try:
+        # Initialize the generator
+        query_generator = st.session_state.chatbot.process_query_with_progress(user_input)
+        final_result = None
+        
+        # Step 1: Initialize
+        with st.spinner("🔄 Starting analysis..."):
+            status, message, partial_result = next(query_generator)
+        
+        # Step 2: Retrieve context
+        with st.spinner("🔍 Retrieving contextual information..."):
+            status, message, partial_result = next(query_generator)
+        
+        # Step 3: Load schema
+        with st.spinner("📋 Loading database schema..."):
+            status, message, partial_result = next(query_generator)
+        
+        # Step 4: Analyze question
+        with st.spinner("🧠 Analyzing your question and requirements..."):
+            status, message, partial_result = next(query_generator)
+        
+        # Step 5: Generate SQL
+        with st.spinner("🔧 Generating SQL query from your request..."):
+            status, message, partial_result = next(query_generator)
+            # Check if we need to retry generation
+            if status == "retrying_generation":
+                with st.spinner("🔄 Trying alternative approach..."):
+                    status, message, partial_result = next(query_generator)
+            # Check if SQL generation failed
+            if status == "error":
+                final_result = partial_result
+                raise StopIteration
+        
+        # Step 6: Validate SQL
+        with st.spinner("✅ Validating SQL query syntax..."):
+            status, message, partial_result = next(query_generator)
+            # Check if we need to fix SQL
+            if status == "fixing_sql":
+                with st.spinner("🛠️ SQL validation failed, fixing query..."):
+                    status, message, partial_result = next(query_generator)
+            # Check if fixing failed
+            if status == "error":
+                final_result = partial_result
+                raise StopIteration
+        
+        # Step 7: Execute query
+        with st.spinner("⚡ Executing query against database..."):
+            status, message, partial_result = next(query_generator)
+            # Check if we need to fix execution
+            if status == "fixing_execution":
+                with st.spinner("🛠️ Query execution failed, fixing and retrying..."):
+                    status, message, partial_result = next(query_generator)
+            # Check if execution failed
+            if status == "error":
+                final_result = partial_result
+                raise StopIteration
+        
+        # Step 8: Generate response
+        with st.spinner("🤖 Generating AI response..."):
+            status, message, partial_result = next(query_generator)
+        
+        # Step 9: Store in memory
+        with st.spinner("💾 Storing interaction in memory..."):
+            status, message, partial_result = next(query_generator)
+        
+        # Step 10: Complete
+        with st.spinner("✅ Finalizing analysis..."):
+            status, message, final_result = next(query_generator)
+        
+        # Process final result
+        if final_result and final_result['success']:
+            # Store result for display in results panel
+            st.session_state.current_query_result = final_result
             
-            if result['success']:
-                # Store result for display in results panel
-                st.session_state.current_query_result = result
-                
-                # Create AI response
-                response_content = f"""**Analysis Complete!**
+            # Create AI response
+            response_content = f"""**Analysis Complete!**
 
-{result['response']}
+{final_result['response']}
 """
-                
-                add_message(response_content, "assistant", "🤖")
-                
-            else:
-                # Handle error
-                error_content = f"""❌ **Query Error**
+            add_message(response_content, "assistant", "🤖")
+            
+        else:
+            # Handle error
+            error_content = f"""❌ **Query Error**
 
-{result['response']}
+{final_result['response'] if final_result else 'Unknown error occurred'}
 
-**Error Details:** {result.get('error', 'Unknown error')}"""
-                
-                add_message(error_content, "assistant", "⚠️")
-                
-        except Exception as e:
-            error_msg = f"❌ **System Error**\n\nError processing query: {str(e)}"
-            add_message(error_msg, "assistant", "⚠️")
+**Error Details:** {final_result.get('error', 'Unknown error') if final_result else 'Processing failed'}"""
+            
+            add_message(error_content, "assistant", "⚠️")
+            
+    except StopIteration:
+        # Handle early termination (usually due to error)
+        if final_result:
+            error_content = f"""❌ **Query Error**
+
+{final_result['response']}
+
+**Error Details:** {final_result.get('error', 'Unknown error')}"""
+            add_message(error_content, "assistant", "⚠️")
+        else:
+            add_message("❌ **Processing Error**\n\nQuery processing was interrupted.", "assistant", "⚠️")
+            
+    except Exception as e:
+        error_msg = f"❌ **System Error**\n\nError processing query: {str(e)}"
+        add_message(error_msg, "assistant", "⚠️")
 
 def clear_chat():
     """Clear chat history"""
