@@ -15,7 +15,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Advanced imports for professional UI
+# Advanced imports for professional UI more enhanced
 try:
     from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
     AGGRID_AVAILABLE = True
