@@ -72,7 +72,7 @@ class SQLGenerator:
         
         # Create plan generation prompt
         plan_prompt = self._build_optimized_plan_prompt(question, context_sections)
-        logger.debug(f"Plan prompt sent to LLM: {plan_prompt[:300]}...")
+        logger.debug(f"Plan prompt sent to LLM: {plan_prompt}...")
         try:
             # Generate plan using Azure OpenAI
             response = self.client.chat.completions.create(
@@ -109,7 +109,7 @@ class SQLGenerator:
     
     def generate_sql(self, question: str, plan: str, context: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
         logger.info(f"Generating SQL for question: {question}")
-        logger.debug(f"Using execution plan: {plan[:200]}...")
+        logger.debug(f"Using execution plan: {plan}...")
         # Build comprehensive context
         if context is None:
             schema_info = self.db_manager.get_database_metadata_for_llm()
@@ -146,8 +146,8 @@ class SQLGenerator:
             
             if response.choices and response.choices[0].message.content:
                 sql_query, explanation = self._parse_response(response.choices[0].message.content)
-                logger.info(f"SQL query generated: {sql_query[:200]}...")
-                logger.debug(f"SQL explanation: {explanation[:200]}...")
+                logger.info(f"SQL query generated: {sql_query}...")
+                logger.debug(f"SQL explanation: {explanation}...")
                 return sql_query, explanation
             else:
                 logger.warning("No response generated from Azure OpenAI API.")
@@ -248,10 +248,10 @@ TIME PERIOD EXAMPLES:
 • YTD 2023 (up to May): [month] BETWEEN '2023-01' AND '2023-05'
 
 BUSINESS UNITS (from entity_business_units):
-{', '.join(business_units[:10]) if business_units else 'Skydive Dubai, Five Guys, Leasing'}
+{', '.join(business_units) if business_units else 'Skydive Dubai, Five Guys, Leasing'}
 
 PROPERTY TYPES (additional_mapping):
-{', '.join(real_estate_types[:10]) if real_estate_types else 'Residential, Commercial, Land, Retail'}""")
+{', '.join(real_estate_types) if real_estate_types else 'Residential, Commercial, Land, Retail'}""")
         
         # Add current schema if available
         if context_sections.get('database_schema'):
@@ -262,7 +262,7 @@ PROPERTY TYPES (additional_mapping):
             prompt_parts.append("\nRECENT CONVERSATION CONTEXT:")
             for interaction in context_sections['recent_interactions'][-2:]:
                 prompt_parts.append(f"Previous Q: {interaction.get('user_question', '')}")
-                prompt_parts.append(f"Previous SQL: {interaction.get('sql_query', '')[:200]}...")
+                prompt_parts.append(f"Previous SQL: {interaction.get('sql_query', '')}...")
         
         # Current question
         prompt_parts.append(f"\nUSER QUESTION: {question}")
@@ -430,7 +430,7 @@ WHERE fd.[department] = 'Operations'
         if context_sections.get('recent_interactions'):
             prompt_parts.append("\nRECENT QUERIES FOR CONTEXT:")
             for interaction in context_sections['recent_interactions'][-1:]:
-                prompt_parts.append(f"Previous SQL: {interaction.get('sql_query', '')[:300]}...")
+                prompt_parts.append(f"Previous SQL: {interaction.get('sql_query', '')}...")
         
         # Current question
         prompt_parts.append(f"\nCURRENT QUESTION: {question}")
@@ -459,7 +459,7 @@ EXPLANATION:
     
     def _parse_response(self, response: str) -> Tuple[str, str]:
         logger.debug("Parsing response from LLM for SQL and explanation.")
-        logger.debug(f"Raw LLM response: {response[:300]}...")
+        logger.debug(f"Raw LLM response: {response}...")
         # Look for SQL code blocks first
         sql_blocks = re.findall(r"```sql(.*?)```", response, re.DOTALL | re.IGNORECASE)
         
@@ -516,12 +516,12 @@ EXPLANATION:
         # Clean up the SQL query
         sql_query = self._clean_sql_query(sql_query)
         
-        logger.debug(f"Parsed SQL: {sql_query[:200]}...")
-        logger.debug(f"Parsed explanation: {explanation[:200]}...")
+        logger.debug(f"Parsed SQL: {sql_query}...")
+        logger.debug(f"Parsed explanation: {explanation}...")
         return sql_query, explanation
     
     def _clean_sql_query(self, sql_query: str) -> str:
-        logger.debug(f"Cleaning SQL query: {sql_query[:200]}...")
+        logger.debug(f"Cleaning SQL query: {sql_query}...")
         if not sql_query:
             return sql_query
             
@@ -538,12 +538,12 @@ EXPLANATION:
         if not sql_query.endswith(';'):
             sql_query += ';'
             
-        logger.debug(f"Cleaned SQL query: {sql_query[:200]}...")
+        logger.debug(f"Cleaned SQL query: {sql_query}...")
         return sql_query
     
     def validate_sql_syntax(self, sql_query: str) -> Tuple[bool, str]:
         logger.info("Validating SQL syntax.")
-        logger.debug(f"Validating SQL: {sql_query[:200]}...")
+        logger.debug(f"Validating SQL: {sql_query}...")
         try:
             # Basic checks first
             if not sql_query.strip():
@@ -618,7 +618,7 @@ EXPLANATION:
     
     def _parse_fix_response(self, response: str) -> Tuple[str, str]:
         logger.debug("Parsing fix response from LLM.")
-        logger.debug(f"Raw fix response: {response[:300]}...")
+        logger.debug(f"Raw fix response: {response}...")
         # Look for SQL code blocks first
         sql_blocks = re.findall(r"```sql(.*?)```", response, re.DOTALL | re.IGNORECASE)
         if sql_blocks:
@@ -672,14 +672,14 @@ EXPLANATION:
                 explanation = response.strip()
         # Clean up the fixed SQL query
         fixed_query = self._clean_sql_query(fixed_query)
-        logger.debug(f"Parsed fixed SQL: {fixed_query[:200]}...")
-        logger.debug(f"Parsed fix explanation: {explanation[:200]}...")
+        logger.debug(f"Parsed fixed SQL: {fixed_query}...")
+        logger.debug(f"Parsed fix explanation: {explanation}...")
         return fixed_query, explanation
     
     def fix_sql_query(self, original_query: str, error_message: str, original_question: str, max_attempts: int = 3) -> Tuple[str, str, bool]:
         for attempt in range(max_attempts):
             logger.info(f"Query Fix Attempt {attempt + 1}/{max_attempts}")
-            logger.debug(f"Original query: {original_query[:200]}...")
+            logger.debug(f"Original query: {original_query}...")
             logger.debug(f"Error message: {error_message}")
             # Build query fixer prompt
             fix_prompt = self._build_query_fixer_prompt(
@@ -711,8 +711,8 @@ EXPLANATION:
                 if response.choices and response.choices[0].message.content:
                     # Parse the fixed query
                     fixed_query, fix_explanation = self._parse_fix_response(response.choices[0].message.content)
-                    logger.debug(f"Fixed query attempt {attempt+1}: {fixed_query[:200]}...")
-                    logger.debug(f"Fix explanation: {fix_explanation[:200]}...")
+                    logger.debug(f"Fixed query attempt {attempt+1}: {fixed_query}...")
+                    logger.debug(f"Fix explanation: {fix_explanation}...")
                     if fixed_query:
                         # Test the fixed query
                         is_valid, validation_message = self.validate_sql_syntax(fixed_query)
@@ -829,20 +829,20 @@ RESPONSE FORMAT:
         
         # Generate execution plan
         plan = self.generate_plan(question, context)
-        logger.debug(f"Generated plan: {plan[:200]}...")
+        logger.debug(f"Generated plan: {plan}...")
         # Generate SQL query using the plan
         sql_query, explanation = self.generate_sql(question, plan, context)
-        logger.debug(f"Generated SQL: {sql_query[:200]}...")
-        logger.debug(f"SQL explanation: {explanation[:200]}...")
+        logger.debug(f"Generated SQL: {sql_query}...")
+        logger.debug(f"SQL explanation: {explanation}...")
         if not sql_query:
             for attempt in range(3):
                 logger.warning(f"Retrying SQL generation, attempt {attempt + 1}/3")
                 print(f"🔄 Retrying SQL generation, attempt {attempt + 1}/3")
                 plan = self.generate_plan(question, context)
-                logger.debug(f"Retry plan: {plan[:200]}...")
+                logger.debug(f"Retry plan: {plan}...")
                 sql_query, explanation = self.generate_sql(question, plan, context)
-                logger.debug(f"Retry SQL: {sql_query[:200]}...")
-                logger.debug(f"Retry explanation: {explanation[:200]}...")
+                logger.debug(f"Retry SQL: {sql_query}...")
+                logger.debug(f"Retry explanation: {explanation}...")
                 if sql_query:
                     break
             else:
@@ -858,8 +858,8 @@ RESPONSE FORMAT:
                 validation_error, 
                 question
             )
-            logger.debug(f"Fixed SQL: {fixed_query[:200]}...")
-            logger.debug(f"Fix explanation: {fix_explanation[:200]}...")
+            logger.debug(f"Fixed SQL: {fixed_query}...")
+            logger.debug(f"Fix explanation: {fix_explanation}...")
             logger.debug(f"Is fixed: {is_fixed}")
             if is_fixed:
                 sql_query = fixed_query
@@ -882,8 +882,8 @@ RESPONSE FORMAT:
                 str(e), 
                 question
             )
-            logger.debug(f"Fixed SQL after execution error: {fixed_query[:200]}...")
-            logger.debug(f"Fix explanation after execution error: {fix_explanation[:200]}...")
+            logger.debug(f"Fixed SQL after execution error: {fixed_query}...")
+            logger.debug(f"Fix explanation after execution error: {fix_explanation}...")
             logger.debug(f"Is fixed after execution error: {is_fixed}")
             if is_fixed:
                 try:

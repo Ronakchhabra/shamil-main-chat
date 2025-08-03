@@ -13,7 +13,11 @@ import os
 import logging
 import logging_config
 
-logging_config.setup_logging()
+logging_config.setup_logging(
+    connection_string=os.getenv('AZURE_BLOB_CONNECTION_STRING'),
+    log_to_console=True,
+    log_to_blob=True,
+    log_to_file=True)
 load_dotenv()
 
 class FinancialDataChatbot:
@@ -202,12 +206,12 @@ IMPORTANT GUIDELINES:
             prompt_parts.append("RECENT CONVERSATION CONTEXT:")
             for interaction in context['recent_interactions'][-2:]:  # Last 2 interactions
                 prompt_parts.append(f"Previous Q: {interaction['user_question']}")
-                prompt_parts.append(f"Previous A: {interaction['text_response'][:200]}...")
+                prompt_parts.append(f"Previous A: {interaction['text_response']}...")
         
         if context.get('relevant_history'):
             prompt_parts.append("\nRELEVANT HISTORICAL CONTEXT:")
             for hist in context['relevant_history'][:1]:  # Top 1 historical match
-                prompt_parts.append(f"Similar past analysis: {hist['response'][:150]}...")
+                prompt_parts.append(f"Similar past analysis: {hist['response']}...")
         
         # Current analysis
         prompt_parts.append(f"\nCURRENT USER QUESTION: {user_question}")
