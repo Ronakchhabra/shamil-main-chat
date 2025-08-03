@@ -11,3 +11,6 @@ pyodbc
 openai
 faiss-cpu
 sqlalchemy
+azure-storage-blob>=12.19.0
+azure-identity>=1.15.0
+azure-core>=1.29.0

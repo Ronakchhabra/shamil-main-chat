@@ -1,7 +1,7 @@
 import uuid
 import json
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Generator, Tuple
+from typing import Dict, List, Any, Optional
 import pandas as pd
 from openai import AzureOpenAI
 from db import DatabaseManager
@@ -10,6 +10,10 @@ from memory import MemoryManager
 import re
 from dotenv import load_dotenv
 import os
+import logging
+import logging_config
+
+logging_config.setup_logging()
 load_dotenv()
 
 class FinancialDataChatbot:
@@ -28,6 +32,7 @@ class FinancialDataChatbot:
         self.deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
         
         if not self.api_key:
+            logging.error("Azure OpenAI API key is missing.")
             raise ValueError("Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable.")
         
         # Initialize Azure OpenAI client
@@ -46,6 +51,9 @@ class FinancialDataChatbot:
         self.session_id = str(uuid.uuid4())
         self.conversation_started = datetime.now()
         
+        logging.info(f"Financial Data Chatbot initialized with Azure OpenAI")
+        logging.info(f"Database tables: {', '.join(self.db_manager.get_all_tables())}")
+        logging.info(f"Session ID: {self.session_id}")
         print(f"✅ Financial Data Chatbot initialized with Azure OpenAI")
         print(f"📊 Database tables: {', '.join(self.db_manager.get_all_tables())}")
         print(f"🔗 Session ID: {self.session_id}")
@@ -60,18 +68,22 @@ class FinancialDataChatbot:
         Returns:
             Dictionary containing the complete response and metadata
         """
+        logging.info(f"Processing user query: {user_question}")
         try:
             # Step 1: Get contextual information from hybrid memory
-            print("🔍 Retrieving contextual information...")
+            logging.info("Retrieving contextual information...")
             context = self.memory_manager.get_contextual_information(user_question)
             
             # Step 2: Add database schema to context
             context['database_schema'] = self.db_manager.get_database_metadata_for_llm()
             
             # Step 3: Generate SQL query with enhanced context
-            print("🔧 Generating SQL query...")
+            logging.info("Generating SQL query...")
             sql_results,sql_query, sql_explanation = self.sql_generator.get_data(user_question, context)
+            logging.debug(f"SQL Query: {sql_query}")
+            logging.debug(f"SQL Explanation: {sql_explanation}")
             if not sql_query or sql_results is None:
+                logging.warning("Failed to generate a valid SQL query.")
                 return self._create_error_response(
                     user_question,
                     "Failed to generate a valid SQL query",
@@ -80,9 +92,10 @@ class FinancialDataChatbot:
             tables_involved = []
             if sql_query:
                 tables_involved = self._extract_tables_from_sql(sql_query)
+                logging.info(f"Tables involved in query: {tables_involved}")
 
             # Step 6: Generate natural language response
-            print("📝 Generating final response...")
+            logging.info("Generating final response...")
             final_response = self._generate_final_response(
                 user_question, sql_query, sql_results, context
             )
@@ -105,8 +118,10 @@ class FinancialDataChatbot:
             }
             
             self.memory_manager.store_interaction(interaction)
+            logging.info(f"Interaction stored: {interaction['id']}")
             
             # Step 8: Return complete response
+            logging.info("Returning response to user.")
             return {
                 'success': True,
                 'response': final_response,
@@ -119,162 +134,17 @@ class FinancialDataChatbot:
             }
             
         except Exception as e:
+            logging.error(f"Unexpected error during query processing: {str(e)}", exc_info=True)
             return self._create_error_response(
                 user_question,
                 f"Unexpected error: {str(e)}",
                 "System error occurred during processing"
             )
     
-    def process_query_with_progress(self, user_question: str) -> Generator[Tuple[str, str, Optional[Dict[str, Any]]], None, None]:
-        """
-        Process user query through the complete pipeline with progress updates.
-        
-        Args:
-            user_question: User's question in natural language
-            
-        Yields:
-            Tuple of (status, message, partial_result)
-            
-        Returns:
-            Final result dictionary
-        """
-        try:
-            yield ("initializing", "Starting analysis...", None)
-            
-            # Step 1: Get contextual information from hybrid memory
-            yield ("retrieving_context", "Retrieving contextual information...", None)
-            context = self.memory_manager.get_contextual_information(user_question)
-            
-            # Step 2: Add database schema to context
-            yield ("loading_schema", "Loading database schema...", None)
-            context['database_schema'] = self.db_manager.get_database_metadata_for_llm()
-            
-            # Step 3: Generate execution plan
-            yield ("analyzing_question", "Analyzing your question and requirements...", None)
-            plan = self.sql_generator.generate_plan(user_question, context)
-            
-            # Step 4: Generate SQL query
-            yield ("generating_sql", "Generating SQL query from your request...", None)
-            sql_query, sql_explanation = self.sql_generator.generate_sql(user_question, plan, context)
-            
-            # Step 5: Handle SQL generation failure with retries
-            if not sql_query:
-                yield ("retrying_generation", "Initial attempt failed, trying alternative approach...", None)
-                
-                for attempt in range(3):
-                    plan = self.sql_generator.generate_plan(user_question, context)
-                    sql_query, sql_explanation = self.sql_generator.generate_sql(user_question, plan, context)
-                    if sql_query:
-                        break
-                else:
-                    yield ("error", "Failed to generate SQL query after multiple attempts", None)
-                    return self._create_error_response(user_question, "Failed to generate a valid SQL query")
-            
-            # Step 6: Validate SQL syntax
-            yield ("validating_sql", "Validating SQL query syntax...", None)
-            is_valid, validation_error = self.sql_generator.validate_sql_syntax(sql_query)
-            
-            is_fixing = False  # Flag to track if we're in fixing mode
-            
-            if not is_valid:
-                is_fixing = True
-                yield ("fixing_sql", "SQL validation failed, fixing query...", None)
-                
-                fixed_query, fix_explanation, is_fixed = self.sql_generator.fix_sql_query(
-                    sql_query, 
-                    validation_error, 
-                    user_question
-                )
-                
-                if is_fixed:
-                    sql_query = fixed_query
-                    sql_explanation = fix_explanation
-                    is_fixing = False
-                else:
-                    yield ("error", f"SQL validation failed: {validation_error}", None)
-                    return self._create_error_response(user_question, f"SQL validation failed: {validation_error}")
-            
-            # Step 7: Execute SQL query
-            yield ("executing_query", "Executing query against database...", None)
-            
-            try:
-                sql_results = self.db_manager.execute_query(sql_query)
-                
-            except Exception as e:
-                if not is_fixing:  # Only show fixing message if we haven't already been fixing
-                    is_fixing = True
-                    yield ("fixing_execution", "Query execution failed, fixing and retrying...", None)
-                
-                fixed_query, fix_explanation, is_fixed = self.sql_generator.fix_sql_query(
-                    sql_query, 
-                    str(e), 
-                    user_question
-                )
-                
-                if is_fixed:
-                    try:
-                        sql_results = self.db_manager.execute_query(fixed_query)
-                        sql_query = fixed_query
-                        sql_explanation = fix_explanation
-                        is_fixing = False
-                    except Exception as retry_error:
-                        yield ("error", f"Error executing fixed SQL query: {str(retry_error)}", None)
-                        return self._create_error_response(user_question, f"Error executing fixed SQL query: {str(retry_error)}")
-                else:
-                    yield ("error", f"Error executing SQL query: {str(e)}", None)
-                    return self._create_error_response(user_question, f"Error executing SQL query: {str(e)}")
-            
-            tables_involved = self._extract_tables_from_sql(sql_query) if sql_query else []
-            
-            # Step 8: Generate natural language response
-            yield ("generating_response", "Generating AI response...", None)
-            final_response = self._generate_final_response(user_question, sql_query, sql_results, context)
-            
-            # Step 9: Store interaction in memory
-            yield ("storing_memory", "Storing interaction in memory...", None)
-            interaction = {
-                'id': str(uuid.uuid4()),
-                'session_id': self.session_id,
-                'timestamp': datetime.now().isoformat(),
-                'user_question': user_question,
-                'sql_query': sql_query,
-                'sql_results': sql_results.to_dict('records') if not sql_results.empty else [],
-                'text_response': final_response,
-                'tables_involved': tables_involved,
-                'context_used': {
-                    'has_temporal_reference': context.get('has_temporal_reference', False),
-                    'recent_interactions_count': len(context.get('recent_interactions', [])),
-                    'semantic_matches_count': len(context.get('relevant_history', []))
-                }
-            }
-            
-            self.memory_manager.store_interaction(interaction)
-            
-            # Step 10: Final result
-            final_result = {
-                'success': True,
-                'response': final_response,
-                'sql_query': sql_query,
-                'sql_explanation': sql_explanation,
-                'results_count': len(sql_results),
-                'tables_used': tables_involved,
-                'context_info': interaction['context_used'],
-                'session_id': self.session_id
-            }
-            
-            yield ("completed", "Analysis completed successfully!", final_result)
-            return final_result
-            
-        except Exception as e:
-            error_result = self._create_error_response(user_question, f"Unexpected error: {str(e)}")
-            yield ("error", f"Error: {str(e)}", error_result)
-            return error_result
-
     def _generate_final_response(self, user_question: str, sql_query: str, 
                                sql_results: pd.DataFrame, context: Dict[str, Any]) -> str:
         """Generate natural language response from SQL results."""
-        
-        # Build context for response generation
+        logging.info("Building prompt for response generation.")
         response_prompt = self._build_response_prompt(user_question, sql_query, sql_results, context)
         
         try:
@@ -310,18 +180,21 @@ IMPORTANT GUIDELINES:
             )
             
             if response.choices and response.choices[0].message.content:
+                logging.info("AI response generated successfully.")
                 return response.choices[0].message.content
             else:
+                logging.warning("AI response was empty.")
                 return "I was able to retrieve the data, but couldn't generate a proper response."
         except Exception as e:
             # Fallback response
+            logging.error(f"Error generating AI response: {str(e)}", exc_info=True)
             print(f"⚠️ Error generating response: {str(e)}")
             return self._create_fallback_response(sql_results, user_question)
     
     def _build_response_prompt(self, user_question: str, sql_query: str, 
                              sql_results: pd.DataFrame, context: Dict[str, Any]) -> str:
         """Build prompt for natural language response generation."""
-        
+        logging.debug("Constructing response prompt.")
         prompt_parts = []
         
         # Context information
@@ -366,6 +239,7 @@ RESPONSE INSTRUCTIONS:
     
     def _create_fallback_response(self, sql_results: pd.DataFrame, user_question: str) -> str:
         """Create a basic fallback response when AI generation fails."""
+        logging.info("Creating fallback response.")
         if sql_results.empty:
             return f"I executed your query but found no data matching your criteria for: {user_question}"
         
@@ -377,6 +251,7 @@ RESPONSE INSTRUCTIONS:
     
     def _extract_tables_from_sql(self, sql_query: str) -> List[str]:
         """Extract table names from SQL query."""
+        logging.debug(f"Extracting table names from SQL: {sql_query}")
         # Simple regex to find table names after FROM and JOIN
         pattern = r'\b(?:FROM|JOIN)\s+["`]?(\w+)["`]?'
         matches = re.findall(pattern, sql_query, re.IGNORECASE)
@@ -385,6 +260,7 @@ RESPONSE INSTRUCTIONS:
     def _create_error_response(self, user_question: str, error_message: str, 
                              explanation: str = "", sql_query: str = "") -> Dict[str, Any]:
         """Create error response structure."""
+        logging.error(f"Error response for question '{user_question}': {error_message}")
         # Clean up error message to remove driver details
         cleaned_error = error_message
         if '[Microsoft][ODBC Driver' in error_message:
@@ -409,6 +285,7 @@ RESPONSE INSTRUCTIONS:
     
     def get_conversation_summary(self) -> Dict[str, Any]:
         """Get summary of current conversation session."""
+        logging.info("Getting conversation summary.")
         recent_interactions = self.memory_manager.session_memory.interactions
         
         return {
@@ -427,9 +304,11 @@ RESPONSE INSTRUCTIONS:
     
     def clear_session(self):
         """Clear current session and start fresh."""
+        logging.info("Clearing session and starting new session.")
         self.memory_manager = MemoryManager()
         self.session_id = str(uuid.uuid4())
         self.conversation_started = datetime.now()
+        logging.info(f"Session cleared. New session ID: {self.session_id}")
         print(f"🔄 Session cleared. New session ID: {self.session_id}")
 
 # Utility function for easy chatbot instantiation
@@ -440,4 +319,5 @@ def create_chatbot() -> FinancialDataChatbot:
     Returns:
         Initialized chatbot instance
     """
+    logging.info("Creating new FinancialDataChatbot instance.")
     return FinancialDataChatbot()

@@ -4,6 +4,9 @@ from openai import AzureOpenAI
 from dotenv import load_dotenv
 from db import DatabaseManager
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -14,9 +17,6 @@ class SQLGenerator:
     def __init__(self):
         """
         Initialize the SQL Generator with Azure OpenAI API.
-        
-        Args:
-            deployment: Azure OpenAI deployment name (defaults to AZURE_OPENAI_DEPLOYMENT environment variable)
         """
         # Azure OpenAI configuration
         self.api_key = os.getenv("AZURE_OPENAI_API_KEY")
@@ -24,6 +24,7 @@ class SQLGenerator:
         self.deployment =os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4")
         
         if not self.api_key:
+            logger.error("Azure OpenAI API key is missing.")
             raise ValueError("Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable.")
             
         # Initialize Azure OpenAI client
@@ -37,33 +38,26 @@ class SQLGenerator:
         
         # Cache for actual column values to improve prompt accuracy
         self._column_value_cache = {}
-    
+        logger.info("SQLGenerator initialized.")
+
     def _get_actual_column_values(self, table_name: str, column_name: str, limit: int = 10) -> List[str]:
         """Get actual values from database for better prompt accuracy."""
         cache_key = f"{table_name}.{column_name}"
-        
+        logger.debug(f"Fetching actual column values for {cache_key}")
         if cache_key not in self._column_value_cache:
             try:
                 # Use TOP instead of LIMIT for SQL Server
                 query = f'SELECT DISTINCT TOP {limit} [{column_name}] FROM [{table_name}] WHERE [{column_name}] IS NOT NULL'
                 result = self.db_manager.execute_query(query)
                 self._column_value_cache[cache_key] = result[column_name].tolist() if not result.empty else []
-            except Exception:
+                logger.info(f"Fetched values for {cache_key}: {self._column_value_cache[cache_key]}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch values for {cache_key}: {str(e)}")
                 self._column_value_cache[cache_key] = []
-        
         return self._column_value_cache[cache_key]
     
     def generate_plan(self, question: str, context: Optional[Dict[str, Any]] = None) -> str:
-        """
-        Generate an execution plan for the SQL query.
-        
-        Args:
-            question: Natural language question
-            context: Enhanced context including database schema and memory
-            
-        Returns:
-            String containing the execution plan
-        """
+        logger.info(f"Generating execution plan for question: {question}")
         # Build comprehensive context
         if context is None:
             schema_info = self.db_manager.get_database_metadata_for_llm()
@@ -78,7 +72,7 @@ class SQLGenerator:
         
         # Create plan generation prompt
         plan_prompt = self._build_optimized_plan_prompt(question, context_sections)
-
+        logger.debug(f"Plan prompt sent to LLM: {plan_prompt[:300]}...")
         try:
             # Generate plan using Azure OpenAI
             response = self.client.chat.completions.create(
@@ -103,25 +97,19 @@ class SQLGenerator:
             
             if response.choices and response.choices[0].message.content:
                 plan = response.choices[0].message.content.strip()
+                logger.info(f"Execution plan generated: {plan}...")
                 return plan
             else:
+                logger.warning("No plan generated from Azure OpenAI API.")
                 return "No plan generated from Azure OpenAI API"
                 
         except Exception as e:
+            logger.error(f"Error generating plan with Azure OpenAI API: {str(e)}")
             return f"Error generating plan with Azure OpenAI API: {str(e)}"
     
     def generate_sql(self, question: str, plan: str, context: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
-        """
-        Generate SQL query from natural language question with enhanced context and execution plan.
-        
-        Args:
-            question: Natural language question
-            plan: Execution plan generated in the previous step
-            context: Enhanced context including database schema and memory
-            
-        Returns:
-            Tuple containing (sql_query, explanation)
-        """
+        logger.info(f"Generating SQL for question: {question}")
+        logger.debug(f"Using execution plan: {plan[:200]}...")
         # Build comprehensive context
         if context is None:
             schema_info = self.db_manager.get_database_metadata_for_llm()
@@ -136,7 +124,7 @@ class SQLGenerator:
         
         # Create enhanced prompt with plan
         prompt = self._build_optimized_sql_prompt(question, plan, context_sections)
-
+        logger.debug(f"SQL prompt sent to LLM: {prompt}...")
         try:
             # Generate response using Azure OpenAI
             response = self.client.chat.completions.create(
@@ -158,15 +146,19 @@ class SQLGenerator:
             
             if response.choices and response.choices[0].message.content:
                 sql_query, explanation = self._parse_response(response.choices[0].message.content)
+                logger.info(f"SQL query generated: {sql_query[:200]}...")
+                logger.debug(f"SQL explanation: {explanation[:200]}...")
                 return sql_query, explanation
             else:
+                logger.warning("No response generated from Azure OpenAI API.")
                 return "", "No response generated from Azure OpenAI API"
                 
         except Exception as e:
+            logger.error(f"Error generating SQL with Azure OpenAI API: {str(e)}")
             return "", f"Error generating SQL with Azure OpenAI API: {str(e)}"
     
     def _build_optimized_plan_prompt(self, question: str, context_sections: Dict[str, Any]) -> str:
-        """Build optimized prompt for plan generation with accurate data structure."""
+        logger.debug("Building optimized plan prompt.")
         
         prompt_parts = []
         
@@ -214,7 +206,7 @@ AZURE SQL SERVER DATABASE SCHEMA:
    • [gl_accounts] INT - Account code (links to financial_data)
    • [gl_description] NVARCHAR(255) - Account description
    • [pl_main_category] NVARCHAR(100) - P&L main category (e.g., 'Revenue', 'Direct Cost')
-   • [pl_subcategory] NVARCHAR(100) - P&L subcategory for detailed classification
+   • [pl_sub_category] NVARCHAR(100) - P&L subcategory for detailed classification
    • [created_date] DATETIME2 - Record creation timestamp
 
 3. ENTITY_BUSINESS_UNITS TABLE (Maps entities to business units):
@@ -299,7 +291,7 @@ Be specific with Azure SQL Server syntax requirements.""")
         return "\n".join(prompt_parts)
         
     def _build_optimized_sql_prompt(self, question: str, plan: str, context_sections: Dict[str, Any]) -> str:
-        """Build optimized prompt for SQL generation with clear examples."""
+        logger.debug("Building optimized SQL prompt.")
         
         prompt_parts = []
         
@@ -466,15 +458,8 @@ EXPLANATION:
         return "\n".join(prompt_parts)
     
     def _parse_response(self, response: str) -> Tuple[str, str]:
-        """
-        Parse the response to extract the SQL query and explanation.
-        
-        Args:
-            response: Raw response from Azure OpenAI
-            
-        Returns:
-            Tuple containing (sql_query, explanation)
-        """
+        logger.debug("Parsing response from LLM for SQL and explanation.")
+        logger.debug(f"Raw LLM response: {response[:300]}...")
         # Look for SQL code blocks first
         sql_blocks = re.findall(r"```sql(.*?)```", response, re.DOTALL | re.IGNORECASE)
         
@@ -531,10 +516,12 @@ EXPLANATION:
         # Clean up the SQL query
         sql_query = self._clean_sql_query(sql_query)
         
+        logger.debug(f"Parsed SQL: {sql_query[:200]}...")
+        logger.debug(f"Parsed explanation: {explanation[:200]}...")
         return sql_query, explanation
     
     def _clean_sql_query(self, sql_query: str) -> str:
-        """Clean and format the SQL query."""
+        logger.debug(f"Cleaning SQL query: {sql_query[:200]}...")
         if not sql_query:
             return sql_query
             
@@ -551,18 +538,12 @@ EXPLANATION:
         if not sql_query.endswith(';'):
             sql_query += ';'
             
+        logger.debug(f"Cleaned SQL query: {sql_query[:200]}...")
         return sql_query
     
     def validate_sql_syntax(self, sql_query: str) -> Tuple[bool, str]:
-        """
-        Enhanced SQL validation for Azure SQL Server.
-        
-        Args:
-            sql_query: SQL query to validate
-            
-        Returns:
-            Tuple containing (is_valid, error_message)
-        """
+        logger.info("Validating SQL syntax.")
+        logger.debug(f"Validating SQL: {sql_query[:200]}...")
         try:
             # Basic checks first
             if not sql_query.strip():
@@ -578,7 +559,6 @@ EXPLANATION:
             # Instead, we'll use SET PARSEONLY ON to validate syntax
             conn = self.db_manager._get_connection()
             cursor = conn.cursor()
-            
             try:
                 # Enable parse-only mode
                 cursor.execute("SET PARSEONLY ON")
@@ -586,15 +566,17 @@ EXPLANATION:
                 cursor.execute(query_for_validation)
                 # Disable parse-only mode
                 cursor.execute("SET PARSEONLY OFF")
+                logger.info("SQL syntax is valid.")
                 return True, "Query syntax is valid"
             except Exception as e:
                 cursor.execute("SET PARSEONLY OFF")
+                logger.warning(f"SQL syntax validation failed: {str(e)}")
                 raise e
                 
         except Exception as e:
-            # Clean up error message to remove driver details
             error_msg = str(e)
-            
+            logger.error(f"SQL validation error: {error_msg}")
+            # Clean up error message to remove driver details
             # Extract just the SQL Server error message
             if '[Microsoft][ODBC Driver' in error_msg:
                 # Extract the actual error message
@@ -635,13 +617,8 @@ EXPLANATION:
                 return False, f"SQL error: {error_msg}"
     
     def _parse_fix_response(self, response: str) -> Tuple[str, str]:
-        """
-        Parse the response to extract the fixed query and explanation.
-        Args:
-            response: Raw response from Azure OpenAI
-        Returns:
-            Tuple containing (fixed_query, explanation)
-        """
+        logger.debug("Parsing fix response from LLM.")
+        logger.debug(f"Raw fix response: {response[:300]}...")
         # Look for SQL code blocks first
         sql_blocks = re.findall(r"```sql(.*?)```", response, re.DOTALL | re.IGNORECASE)
         if sql_blocks:
@@ -695,25 +672,15 @@ EXPLANATION:
                 explanation = response.strip()
         # Clean up the fixed SQL query
         fixed_query = self._clean_sql_query(fixed_query)
+        logger.debug(f"Parsed fixed SQL: {fixed_query[:200]}...")
+        logger.debug(f"Parsed fix explanation: {explanation[:200]}...")
         return fixed_query, explanation
     
     def fix_sql_query(self, original_query: str, error_message: str, original_question: str, max_attempts: int = 3) -> Tuple[str, str, bool]:
-        """
-        Fix SQL query using LLM when it encounters errors.
-        
-        Args:
-            original_query: The SQL query that failed
-            error_message: The error message from database
-            original_question: The original natural language question
-            max_attempts: Maximum number of fix attempts
-            
-        Returns:
-            Tuple containing (fixed_query, fix_explanation, is_fixed)
-        """
-        
         for attempt in range(max_attempts):
-            print(f"\n🔧 Query Fix Attempt {attempt + 1}/{max_attempts}")
-            
+            logger.info(f"Query Fix Attempt {attempt + 1}/{max_attempts}")
+            logger.debug(f"Original query: {original_query[:200]}...")
+            logger.debug(f"Error message: {error_message}")
             # Build query fixer prompt
             fix_prompt = self._build_query_fixer_prompt(
                 original_query, 
@@ -744,35 +711,40 @@ EXPLANATION:
                 if response.choices and response.choices[0].message.content:
                     # Parse the fixed query
                     fixed_query, fix_explanation = self._parse_fix_response(response.choices[0].message.content)
-                    
+                    logger.debug(f"Fixed query attempt {attempt+1}: {fixed_query[:200]}...")
+                    logger.debug(f"Fix explanation: {fix_explanation[:200]}...")
                     if fixed_query:
                         # Test the fixed query
                         is_valid, validation_message = self.validate_sql_syntax(fixed_query)
+                        logger.debug(f"Validation result: {is_valid}, message: {validation_message}")
                         if is_valid:
                             try:
                                 # Execute the fixed query to ensure it runs
                                 data = self.db_manager.execute_query(fixed_query)
+                                logger.info(f"Fixed query executed successfully on attempt {attempt+1}")
                             except Exception as e:
                                 validation_message = str(e)
+                                logger.warning(f"Execution of fixed query failed: {validation_message}")
                                 is_valid = False
-                        
                         if is_valid:
+                            logger.info(f"Query fixed successfully on attempt {attempt + 1}")
                             print(f"✅ Query fixed successfully on attempt {attempt + 1}")
                             return fixed_query, fix_explanation, True
                         else:
+                            logger.warning(f"Fix attempt {attempt + 1} still has errors: {validation_message}")
                             print(f"❌ Fix attempt {attempt + 1} still has errors: {validation_message}")
-                            error_message = validation_message  # Use new error for next attempt
-                            original_query = fixed_query  # Use fixed query as base for next attempt
-                    
+                            error_message = validation_message
+                            original_query = fixed_query
             except Exception as e:
+                logger.error(f"Fix attempt {attempt + 1} failed: {str(e)}")
                 print(f"❌ Fix attempt {attempt + 1} failed: {str(e)}")
                 continue
-        
+        logger.error(f"Could not fix query after {max_attempts} attempts")
         print(f"❌ Could not fix query after {max_attempts} attempts")
         return original_query, "Could not fix the query automatically", False
 
     def _build_query_fixer_prompt(self, failed_query: str, error_message: str, original_question: str, attempt_number: int) -> str:
-        """Build specialized prompt for fixing SQL queries."""
+        logger.debug("Building query fixer prompt.")
         
         prompt_parts = []
         
@@ -849,16 +821,7 @@ RESPONSE FORMAT:
         question: str, 
         context: Optional[Dict[str, Any]] = None, 
     ) -> Tuple[str, str]:
-        """
-        Generate SQL query with execution plan from natural language question.
-        
-        Args:
-            question: Natural language question
-            context: Enhanced context including database schema and memory
-            
-        Returns:
-            Tuple containing (sql_results, sql_query, explanation)
-        """        
+        logger.info(f"Getting data for question: {question}")
         # Initialize variables
         sql_results = None
         sql_query = ""
@@ -866,40 +829,76 @@ RESPONSE FORMAT:
         
         # Generate execution plan
         plan = self.generate_plan(question, context)
+        logger.debug(f"Generated plan: {plan[:200]}...")
         # Generate SQL query using the plan
         sql_query, explanation = self.generate_sql(question, plan, context)
-        
+        logger.debug(f"Generated SQL: {sql_query[:200]}...")
+        logger.debug(f"SQL explanation: {explanation[:200]}...")
         if not sql_query:
             for attempt in range(3):
+                logger.warning(f"Retrying SQL generation, attempt {attempt + 1}/3")
                 print(f"🔄 Retrying SQL generation, attempt {attempt + 1}/3")
                 plan = self.generate_plan(question, context)
-    
+                logger.debug(f"Retry plan: {plan[:200]}...")
                 sql_query, explanation = self.generate_sql(question, plan, context)
+                logger.debug(f"Retry SQL: {sql_query[:200]}...")
+                logger.debug(f"Retry explanation: {explanation[:200]}...")
                 if sql_query:
                     break
             else:
+                logger.error("Failed to generate SQL query after multiple attempts")
                 return None, "", "Failed to generate SQL query after multiple attempts"
-        
-        # Validate SQL syntax
         is_valid, validation_error = self.validate_sql_syntax(sql_query)
+        logger.debug(f"SQL validation result: {is_valid}, message: {validation_error}")
         if not is_valid:
+            logger.warning(f"SQL validation failed: {validation_error}")
             print(f"⚠️ SQL validation failed: {validation_error}")
             fixed_query, fix_explanation, is_fixed = self.fix_sql_query(
                 sql_query, 
                 validation_error, 
                 question
             )
+            logger.debug(f"Fixed SQL: {fixed_query[:200]}...")
+            logger.debug(f"Fix explanation: {fix_explanation[:200]}...")
+            logger.debug(f"Is fixed: {is_fixed}")
             if is_fixed:
                 sql_query = fixed_query
                 explanation = fix_explanation
+                logger.info("SQL query fixed successfully")
                 print("✅ SQL query fixed successfully")
             else:
+                logger.error(f"SQL validation failed: {validation_error}")
                 return None, sql_query, f"SQL validation failed: {validation_error}"
-        
-        # Execute SQL query
         try:
             sql_results = self.db_manager.execute_query(sql_query)
+            logger.info("SQL query executed successfully")
+            logger.debug(f"SQL results: {str(sql_results.head(3)) if hasattr(sql_results, 'head') else str(sql_results)}")
             print("✅ SQL query executed successfully")
+        except Exception as e:
+            logger.error(f"SQL execution failed: {str(e)}")
+            print(f"❌ SQL execution failed: {str(e)}")
+            fixed_query, fix_explanation, is_fixed = self.fix_sql_query(
+                sql_query, 
+                str(e), 
+                question
+            )
+            logger.debug(f"Fixed SQL after execution error: {fixed_query[:200]}...")
+            logger.debug(f"Fix explanation after execution error: {fix_explanation[:200]}...")
+            logger.debug(f"Is fixed after execution error: {is_fixed}")
+            if is_fixed:
+                try:
+                    sql_results = self.db_manager.execute_query(fixed_query)
+                    sql_query = fixed_query
+                    explanation = fix_explanation
+                    logger.info("Fixed SQL query executed successfully")
+                    logger.debug(f"Fixed SQL results: {str(sql_results.head(3)) if hasattr(sql_results, 'head') else str(sql_results)}")
+                    print("✅ Fixed SQL query executed successfully")
+                except Exception as retry_error:
+                    logger.error(f"Error executing fixed SQL query: {str(retry_error)}")
+                    return None, fixed_query, f"Error executing fixed SQL query: {str(retry_error)}"
+            else:
+                logger.error(f"Error executing SQL query: {str(e)}")
+                return None, sql_query, f"Error executing SQL query: {str(e)}"
         except Exception as e:
             print(f"❌ SQL execution failed: {str(e)}")
             fixed_query, fix_explanation, is_fixed = self.fix_sql_query(
